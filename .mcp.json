@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "local-hands": {
+      "type": "stdio",
+      "command": "python",
+      "args": [
+        "./server/local_agent.py"
+      ],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      },
+      "cwd": "${PLUGIN_ROOT}"
+    }
+  }
+}
