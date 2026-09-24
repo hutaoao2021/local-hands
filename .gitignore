@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.log
+.DS_Store
+Thumbs.db
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+.local-hands/
+state.json
+http_secret.txt
