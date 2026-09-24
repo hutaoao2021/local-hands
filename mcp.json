@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "local-hands": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["./server/local_agent.py"],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      },
+      "cwd": "${PLUGIN_ROOT}"
+    }
+  }
+}
