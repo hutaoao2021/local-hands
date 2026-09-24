@@ -1,0 +1,414 @@
+#!/usr/bin/env python3
+"""Local Hands MCP runtime.
+
+A dependency-light local execution layer for Agent Plugins.  The server is
+intentionally conservative about filesystem roots and intentionally explicit
+about high-risk shell commands.  It is designed around Codex-like workflows:
+inspect -> edit/patch -> run -> observe -> verify.
+"""
+
+import base64
+import fnmatch
+import hashlib
+import json
+import os
+import queue
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import uuid
+from pathlib import Path
+from urllib.parse import urlparse
+
+SERVER_NAME = "local-hands"
+SERVER_VERSION = "0.5.0"
+DEFAULT_PROTOCOL = "2025-06-18"
+MAX_OUTPUT = 300_000
+
+DATA_DIR = Path(os.environ.get("PLUGIN_DATA") or (Path.home() / ".local-hands")).expanduser()
+STATE_PATH = DATA_DIR / "state.json"
+SKILL_HOME = DATA_DIR / "skills"
+SKILL_REVIEW_HOME = DATA_DIR / "skill-reviews"
+LEGACY_CONFIG_PATH = DATA_DIR / "authorized_roots.json"
+
+
+def _norm(p: Path) -> Path:
+    try:
+        return p.expanduser().resolve()
+    except Exception:
+        return Path(os.path.abspath(os.path.expanduser(str(p))))
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _default_state():
+    home = _norm(Path.home())
+    return {
+        "roots": [str(home)],
+        "workspace": str(home),
+        "ssh_targets": {},
+        "task": {"goal": "", "plan": [], "notes": "", "updated_at": None},
+        "projects": {},
+        "recent_workspaces": [str(home)],
+    }
+
+
+def _load_state():
+    state = _default_state()
+    try:
+        if STATE_PATH.exists():
+            raw = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                state.update({k: v for k, v in raw.items() if k in state})
+    except Exception:
+        pass
+
+    home = _norm(Path.home())
+    roots = [home]
+    legacy_roots = []
+    try:
+        if LEGACY_CONFIG_PATH.exists():
+            legacy = json.loads(LEGACY_CONFIG_PATH.read_text(encoding="utf-8"))
+            legacy_roots = legacy.get("roots", []) if isinstance(legacy, dict) else []
+    except Exception:
+        legacy_roots = []
+    for item in list(state.get("roots", [])) + list(legacy_roots):
+        try:
+            p = _norm(Path(item))
+            if p.exists() and p.is_dir() and p not in roots:
+                roots.append(p)
+        except Exception:
+            continue
+    state["roots"] = [str(p) for p in roots]
+
+    try:
+        workspace = _norm(Path(state.get("workspace") or home))
+        if not workspace.exists() or not workspace.is_dir() or not any(_is_within(workspace, r) for r in roots):
+            workspace = home
+    except Exception:
+        workspace = home
+    state["workspace"] = str(workspace)
+
+    if not isinstance(state.get("ssh_targets"), dict):
+        state["ssh_targets"] = {}
+    if not isinstance(state.get("task"), dict):
+        state["task"] = _default_state()["task"]
+    if not isinstance(state.get("projects"), dict):
+        state["projects"] = {}
+    if not isinstance(state.get("recent_workspaces"), list):
+        state["recent_workspaces"] = [str(workspace)]
+    clean_recent = []
+    for item in state.get("recent_workspaces", []):
+        try:
+            rp = _norm(Path(item))
+            if rp.exists() and rp.is_dir() and any(_is_within(rp, r) for r in roots):
+                text = str(rp)
+                if text not in clean_recent:
+                    clean_recent.append(text)
+        except Exception:
+            continue
+    if str(workspace) not in clean_recent:
+        clean_recent.insert(0, str(workspace))
+    state["recent_workspaces"] = clean_recent[:20]
+    return state
+
+
+def _save_state():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    STATE_PATH.write_text(json.dumps(STATE, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+STATE = _load_state()
+AUTHORIZED_ROOTS = [_norm(Path(p)) for p in STATE["roots"]]
+WORKSPACE = _norm(Path(STATE["workspace"]))
+PROCESSES = {}
+TERMINALS = {}
+PROCESS_LOCK = threading.Lock()
+TERMINAL_LOCK = threading.Lock()
+
+
+def _resolve_path(value=".", must_exist=False, want_dir=None) -> Path:
+    raw = Path(value or ".").expanduser()
+    p = _norm(raw if raw.is_absolute() else WORKSPACE / raw)
+    if not any(_is_within(p, root) for root in AUTHORIZED_ROOTS):
+        raise PermissionError(f"Path is outside authorized roots: {p}")
+    if must_exist and not p.exists():
+        raise FileNotFoundError(str(p))
+    if want_dir is True and p.exists() and not p.is_dir():
+        raise NotADirectoryError(str(p))
+    if want_dir is False and p.exists() and not p.is_file():
+        raise IsADirectoryError(str(p))
+    return p
+
+
+def _text_result(text, is_error=False):
+    return {"content": [{"type": "text", "text": str(text)}], "isError": bool(is_error)}
+
+
+def _json_result(obj, is_error=False):
+    return _text_result(json.dumps(obj, indent=2, ensure_ascii=False), is_error)
+
+
+def _image_result(data: bytes, mime="image/png", text=None):
+    content = []
+    if text:
+        content.append({"type": "text", "text": text})
+    content.append({"type": "image", "data": base64.b64encode(data).decode("ascii"), "mimeType": mime})
+    return {"content": content, "isError": False}
+
+
+def _trim_output(value, limit=MAX_OUTPUT):
+    value = value or ""
+    if len(value) <= limit:
+        return value, False
+    return value[-limit:], True
+
+
+def tool_agent_info(args):
+    return _json_result({
+        "server": SERVER_NAME,
+        "version": SERVER_VERSION,
+        "platform": sys.platform,
+        "python": sys.version.split()[0],
+        "workspace": str(WORKSPACE),
+        "authorized_roots": [str(p) for p in AUTHORIZED_ROOTS],
+        "plugin_data": str(DATA_DIR),
+        "running_processes": sum(1 for p in PROCESSES.values() if p.poll() is None),
+        "running_terminals": sum(1 for t in TERMINALS.values() if t.poll() is None),
+        "ssh_targets": sorted(STATE.get("ssh_targets", {}).keys()),
+        "installed_skills": sum(1 for _scope, root in _skill_roots() for _p in root.glob("*/SKILL.md")),
+        "recent_workspaces": STATE.get("recent_workspaces", []),
+    })
+
+
+def tool_authorize_root(args):
+    path = _norm(Path(args.get("path", "")))
+    if not path.exists() or not path.is_dir():
+        raise ValueError("The requested root must be an existing directory.")
+    if path not in AUTHORIZED_ROOTS:
+        AUTHORIZED_ROOTS.append(path)
+    STATE["roots"] = [str(p) for p in AUTHORIZED_ROOTS]
+    _save_state()
+    return _json_result({"authorized": str(path), "authorized_roots": STATE["roots"]})
+
+
+def tool_revoke_root(args):
+    global WORKSPACE
+    path = _norm(Path(args.get("path", "")))
+    home = _norm(Path.home())
+    if path == home:
+        raise PermissionError("The default home root cannot be revoked.")
+    AUTHORIZED_ROOTS[:] = [p for p in AUTHORIZED_ROOTS if p != path]
+    if not any(_is_within(WORKSPACE, root) for root in AUTHORIZED_ROOTS):
+        WORKSPACE = home
+    STATE["roots"] = [str(p) for p in AUTHORIZED_ROOTS]
+    STATE["workspace"] = str(WORKSPACE)
+    _save_state()
+    return _json_result({"revoked": str(path), "authorized_roots": STATE["roots"], "workspace": str(WORKSPACE)})
+
+
+def tool_set_workspace(args):
+    global WORKSPACE
+    p = _resolve_path(args.get("path", "."), must_exist=True, want_dir=True)
+    WORKSPACE = p
+    STATE["workspace"] = str(p)
+    recent = [str(p)] + [x for x in STATE.get("recent_workspaces", []) if x != str(p)]
+    STATE["recent_workspaces"] = recent[:20]
+    project = STATE.setdefault("projects", {}).get(str(p), {})
+    STATE["task"] = dict(project.get("task") or {"goal": "", "plan": [], "notes": "", "updated_at": None})
+    _save_state()
+    return _json_result({"workspace": str(WORKSPACE), "persisted": True, "recent_workspaces": STATE["recent_workspaces"], "task": STATE["task"]})
+
+
+def tool_workspace_list(args):
+    items = []
+    for raw in STATE.get("recent_workspaces", []):
+        try:
+            p = _norm(Path(raw))
+            if p.exists() and p.is_dir() and any(_is_within(p, r) for r in AUTHORIZED_ROOTS):
+                items.append({"path": str(p), "active": p == WORKSPACE})
+        except Exception:
+            continue
+    return _json_result({"workspaces": items})
+
+
+def tool_task_state_get(args):
+    key = str(WORKSPACE)
+    project = STATE.setdefault("projects", {}).get(key, {})
+    task = dict(project.get("task") or STATE.get("task") or {})
+    return _json_result({"workspace": key, "task": task})
+
+
+def tool_task_state_set(args):
+    key = str(WORKSPACE)
+    projects = STATE.setdefault("projects", {})
+    project = dict(projects.get(key) or {})
+    current = dict(project.get("task") or STATE.get("task") or {})
+    for field in ("goal", "plan", "notes"):
+        if field in args:
+            current[field] = args[field]
+    current["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    project["task"] = current
+    projects[key] = project
+    STATE["task"] = current  # active-workspace compatibility mirror
+    _save_state()
+    return _json_result({"workspace": key, "task": current})
+
+
+
+def _project_key(path=None):
+    p = _norm(Path(path)) if path else WORKSPACE
+    return str(p)
+
+
+def tool_project_context_get(args):
+    key = _project_key()
+    return _json_result({"workspace": key, "context": STATE.get("projects", {}).get(key, {})})
+
+
+def tool_project_context_set(args):
+    key = _project_key()
+    projects = STATE.setdefault("projects", {})
+    current = dict(projects.get(key) or {})
+    for field in ("summary", "build_command", "test_command", "lint_command", "run_command", "benchmark_command", "notes", "important_files"):
+        if field in args:
+            current[field] = args[field]
+    current["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    projects[key] = current
+    _save_state()
+    return _json_result({"workspace": key, "context": current})
+
+
+def _skill_roots():
+    roots = []
+    packaged = Path(__file__).resolve().parent.parent / "skills"
+    if packaged.exists():
+        roots.append(("packaged", packaged))
+    if SKILL_HOME.exists():
+        roots.append(("global", SKILL_HOME))
+    workspace_skills = WORKSPACE / ".local-hands" / "skills"
+    if workspace_skills.exists():
+        roots.append(("workspace", workspace_skills))
+    return roots
+
+
+def _safe_skill_name(value):
+    value = re.sub(r"[^a-z0-9-]+", "-", str(value or "").strip().lower()).strip("-")
+    if not value or len(value) > 64:
+        raise ValueError("Skill name must produce a 1-64 character lowercase kebab-case name")
+    return value
+
+
+def _read_skill_frontmatter(text):
+    out = {}
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end >= 0:
+            for line in text[3:end].splitlines():
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    if k.strip() in {"name", "description"}:
+                        out[k.strip()] = v.strip().strip('"\'')
+    return out
+
+
+def _skill_inventory(base, max_files=300):
+    files = []
+    scripts = []
+    binaries = []
+    suspicious = []
+    patterns = [
+        ("destructive-delete", r"\b(?:rm\s+-rf|Remove-Item\b[^\n]*-Recurse|rmdir\s+/s|del\s+/[sq])\b"),
+        ("privilege-change", r"\b(?:sudo|runas|chmod\s+777|chown)\b"),
+        ("network-download", r"\b(?:curl|wget|Invoke-WebRequest|Start-BitsTransfer)\b"),
+        ("dynamic-exec", r"\b(?:eval\s*\(|exec\s*\(|os\.system\s*\(|subprocess\.)"),
+        ("credential-access", r"(?i)(browser\s+cookie|credential|private[_ -]?key|token|password)"),
+    ]
+    script_ext = {".py", ".ps1", ".sh", ".bash", ".zsh", ".bat", ".cmd", ".js", ".ts", ".rb", ".pl"}
+    for idx, child in enumerate(sorted(base.rglob("*"))):
+        if idx >= max_files:
+            break
+        if child.is_symlink():
+            raise ValueError(f"Skill contains a symlink, which is not allowed: {child.relative_to(base)}")
+        if not child.is_file():
+            continue
+        rel = str(child.relative_to(base))
+        size = child.stat().st_size
+        entry = {"path": rel, "bytes": size}
+        files.append(entry)
+        if child.suffix.lower() in script_ext:
+            scripts.append(entry)
+        if size > 2 * 1024 * 1024:
+            binaries.append(entry)
+            continue
+        data = child.read_bytes()
+        if b"\x00" in data[:8192]:
+            binaries.append(entry)
+            continue
+        text = data.decode("utf-8", errors="replace")
+        for label, pat in patterns:
+            if re.search(pat, text, re.I):
+                suspicious.append({"path": rel, "kind": label})
+    seen = set()
+    suspicious = [x for x in suspicious if not ((x["path"], x["kind"]) in seen or seen.add((x["path"], x["kind"])))]
+    return {"files": files, "scripts": scripts, "binaries": binaries, "suspicious": suspicious, "truncated": len(files) >= max_files}
+
+
+def tool_skill_list(args):
+    found = []
+    seen = set()
+    for scope, root in _skill_roots():
+        for skill_md in root.glob("*/SKILL.md"):
+            try:
+                text = skill_md.read_text(encoding="utf-8", errors="replace")
+                meta = _read_skill_frontmatter(text)
+                name = meta.get("name") or skill_md.parent.name
+                key = (scope, name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                found.append({"name": name, "scope": scope, "description": meta.get("description", ""), "path": str(skill_md.parent)})
+            except OSError:
+                continue
+    found.sort(key=lambda x: (x["name"], x["scope"]))
+    return _json_result({"skills": found})
+
+
+def _find_skill(name):
+    target = str(name or "").strip()
+    matches = []
+    for scope, root in _skill_roots():
+        for skill_md in root.glob("*/SKILL.md"):
+            try:
+                text = skill_md.read_text(encoding="utf-8", errors="replace")
+                meta = _read_skill_frontmatter(text)
+                if target in {skill_md.parent.name, meta.get("name")}:
+                    matches.append((scope, skill_md.parent, meta, text))
+            except OSError:
+                continue
+    if not matches:
+        raise FileNotFoundError(f"Installed skill not found: {target}")
+    rank = {"workspace": 0, "global": 1, "packaged": 2}
+    matches.sort(key=lambda x: rank.get(x[0], 9))
+    return matches[0]
+
+
+def tool_skill_read(args):
+    scope, base, meta, text = _find_skill(args.get("name"))
+    max_bytes = max(1024, min(int(args.get("max_bytes", 262144)), 1048576))
+    encoded = text.encode("utf-8")
+    truncated = len(encoded) > max_bytes
+    if truncated:
+        text = encoded[:max_bytes].decode("utf-8", errors="replace")
+    inv = _skill_inventory(base, max_files=max(20, min(int(args.get("max_files", 200)), 500
