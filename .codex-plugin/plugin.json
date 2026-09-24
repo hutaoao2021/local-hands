@@ -1,0 +1,26 @@
+{
+  "interface": {
+    "displayName": "Local Hands",
+    "shortDescription": "Code, terminal, files, and computer control from chat",
+    "longDescription": "Connect ChatGPT to a Codex-style execution runtime that can resume projects, inspect and patch code, infer and run verification commands, use native Windows ConPTY or POSIX PTYs, monitor long jobs, work over SSH, review Git state, control an authorized desktop, and safely discover, review, install, and reuse Agent Skills.",
+    "developerName": "Plugin owner",
+    "category": "Engineering & IT",
+    "capabilities": [
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Inspect the current project on my computer and tell me what you find before changing anything.",
+      "Work on this coding task like Codex: inspect, edit, run tests, and verify the result.",
+      "Use the computer tools to complete this task, including long-running commands when needed."
+    ]
+  },
+  "name": "local-hands",
+  "version": "0.5.0",
+  "description": "Give ChatGPT a Codex-style local execution runtime with project memory, safe Skill acquisition, native Windows ConPTY, verification loops, long jobs, SSH, Git, desktop control, and web MCP.",
+  "author": {
+    "name": "Plugin owner"
+  },
+  "keywords": [],
+  "skills": "./skills",
+  "mcpServers": "./.mcp.json"
+}
