@@ -28,7 +28,7 @@ if str(HERE) not in sys.path:
 import local_agent as core
 
 BRIDGE_VERSION = 1
-SERVER_VERSION = "0.6.0"
+SERVER_VERSION = "0.6.1"
 DEFAULT_PORTS = tuple(range(8766, 8771))
 MAX_BODY = 4 * 1024 * 1024
 MAX_CALLS = 8
