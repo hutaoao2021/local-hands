@@ -2,6 +2,7 @@ const $ = (id) => document.getElementById(id);
 let currentTab = null;
 let paired = false;
 let enabled = false;
+let handsFree = false;
 
 async function activeChatTab() {
   const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
@@ -28,8 +29,9 @@ async function refresh() {
     if (!state?.ok) throw new Error(state?.error || "Could not read Local Hands status");
     paired = Boolean(state.bridge?.found && state.bridge?.paired);
     enabled = Boolean(state.tabEnabled);
+    handsFree = Boolean(state.handsFree);
     if (!state.bridge?.found) {
-      $("status").textContent = "Bridge offline — start Local Hands Browser Bridge";
+      $("status").textContent = "Bridge offline — Local Hands should start automatically after Windows login if autostart is installed";
       $("pairing").hidden = true;
       $("controls").hidden = true;
       return;
@@ -39,6 +41,7 @@ async function refresh() {
       : `Bridge found on 127.0.0.1:${state.bridge.port} · pairing required`;
     $("pairing").hidden = paired;
     $("controls").hidden = !paired;
+    $("handsfree").checked = handsFree;
     $("toggle").textContent = enabled ? "Pause this ChatGPT tab" : "Enable this ChatGPT tab";
   } catch (error) {
     showError(error?.message || String(error));
@@ -54,6 +57,22 @@ $("pair").addEventListener("click", async () => {
     if (!response?.ok) throw new Error(response?.error || "Pairing failed");
     await refresh();
   } catch (error) {
+    showError(error?.message || String(error));
+  }
+});
+
+$("handsfree").addEventListener("change", async () => {
+  showError("");
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "lh-set-hands-free",
+      enabled: $("handsfree").checked
+    });
+    if (!response?.ok) throw new Error(response?.error || "Could not change Hands-free mode");
+    handsFree = Boolean(response.handsFree);
+    await refresh();
+  } catch (error) {
+    $("handsfree").checked = ! $("handsfree").checked;
     showError(error?.message || String(error));
   }
 });
