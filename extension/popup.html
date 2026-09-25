@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Local Hands Companion</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <h1>Local Hands</h1>
+    <div id="status" class="status">Checking bridge…</div>
+    <section id="pairing" hidden>
+      <label for="code">6-digit pairing code</label>
+      <div class="row">
+        <input id="code" inputmode="numeric" maxlength="6" placeholder="123456">
+        <button id="pair">Pair</button>
+      </div>
+      <p>Run <code>scripts\start-bridge.ps1</code> and enter the code printed in PowerShell.</p>
+    </section>
+    <section id="controls" hidden>
+      <button id="toggle">Enable this ChatGPT tab</button>
+      <button id="init" class="secondary">Initialize this chat</button>
+      <p id="hint">Enable a tab, initialize once, then give ChatGPT your normal task.</p>
+    </section>
+    <div id="error" class="error" hidden></div>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
