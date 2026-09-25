@@ -2,7 +2,7 @@
   "interface": {
     "displayName": "Local Hands",
     "shortDescription": "Code, terminal, files, and computer control from chat",
-    "longDescription": "Connect ChatGPT to a Codex-style execution runtime that can resume projects, inspect and patch code, infer and run verification commands, use native Windows ConPTY or POSIX PTYs, monitor long jobs, work over SSH, review Git state, control an authorized desktop, and safely discover, review, install, and reuse Agent Skills.",
+    "longDescription": "Connect ChatGPT to a Codex-style execution runtime that can resume projects, inspect and patch code, run verification, use native Windows ConPTY or POSIX PTYs, monitor long jobs, work over SSH, control an authorized desktop, acquire Skills safely, and optionally bridge ordinary ChatGPT browser conversations to the same loopback runtime through the included Chrome/Edge companion.",
     "developerName": "Plugin owner",
     "category": "Engineering & IT",
     "capabilities": [
@@ -15,8 +15,8 @@
     ]
   },
   "name": "local-hands",
-  "version": "0.5.0",
-  "description": "Give ChatGPT a Codex-style local execution runtime with project memory, safe Skill acquisition, native Windows ConPTY, verification loops, long jobs, SSH, Git, desktop control, and web MCP.",
+  "version": "0.6.0",
+  "description": "Give ChatGPT a Codex-style local execution runtime with a loopback browser companion for ordinary ChatGPT conversations, plus project memory, safe Skill acquisition, native Windows ConPTY, verification loops, long jobs, SSH, Git, and desktop control.",
   "author": {
     "name": "Plugin owner"
   },
