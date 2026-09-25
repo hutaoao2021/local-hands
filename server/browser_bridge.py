@@ -28,7 +28,7 @@ if str(HERE) not in sys.path:
 import local_agent as core
 
 BRIDGE_VERSION = 1
-SERVER_VERSION = "0.6.1"
+SERVER_VERSION = "0.6.2"
 DEFAULT_PORTS = tuple(range(8766, 8771))
 MAX_BODY = 4 * 1024 * 1024
 MAX_CALLS = 8
@@ -168,7 +168,7 @@ class BridgeServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LocalHandsBrowserBridge/0.6"
+    server_version = "LocalHandsBrowserBridge/0.6.2"
 
     def log_message(self, fmt, *args):
         if self.server.verbose:
@@ -181,7 +181,11 @@ class Handler(BaseHTTPRequestHandler):
         return self.headers.get("X-Local-Hands-Extension") == "1"
 
     def _origin_ok(self):
-        return is_extension_origin(self._origin()) and self._extension_request()
+        # Chrome/Edge extension service-worker fetches with host_permissions may
+        # omit Origin entirely. Require our extension marker on every real
+        # request; when Origin is present, it must still be an extension origin.
+        origin = self._origin()
+        return self._extension_request() and (not origin or is_extension_origin(origin))
 
     def _cors(self):
         origin = self._origin()
