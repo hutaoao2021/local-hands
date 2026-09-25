@@ -1,0 +1,18 @@
+#local-hands-bridge-badge {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 2147483647;
+  border: 1px solid rgba(127,127,127,.45);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font: 12px/1.2 system-ui, sans-serif;
+  background: rgba(30,30,30,.92);
+  color: white;
+  box-shadow: 0 2px 10px rgba(0,0,0,.2);
+  cursor: pointer;
+  opacity: .88;
+}
+#local-hands-bridge-badge[data-state="active"] { outline: 1px solid rgba(80,220,130,.65); }
+#local-hands-bridge-badge[data-state="busy"] { outline: 1px solid rgba(255,190,60,.75); }
+#local-hands-bridge-badge[data-state="error"] { outline: 1px solid rgba(255,80,80,.8); }
