@@ -3,7 +3,8 @@ const HEADER = {"X-Local-Hands-Extension": "1"};
 const STORAGE = {
   token: "lh_bridge_token",
   port: "lh_bridge_port",
-  enabledTabs: "lh_enabled_tabs"
+  enabledTabs: "lh_enabled_tabs",
+  handsFree: "lh_hands_free"
 };
 
 async function getStored(keys) {
@@ -94,23 +95,58 @@ async function bridgeBatch(command) {
   });
 }
 
-async function tabMap() {
-  const stored = await getStored([STORAGE.enabledTabs]);
-  return stored[STORAGE.enabledTabs] || {};
+async function tabSettings() {
+  const stored = await getStored([STORAGE.enabledTabs, STORAGE.handsFree]);
+  return {
+    map: stored[STORAGE.enabledTabs] || {},
+    handsFree: Boolean(stored[STORAGE.handsFree])
+  };
 }
 
 async function setTabEnabled(tabId, enabled) {
-  const map = await tabMap();
-  if (enabled) map[String(tabId)] = {enabled: true, at: Date.now()};
-  else delete map[String(tabId)];
+  const {map} = await tabSettings();
+  map[String(tabId)] = {enabled: Boolean(enabled), at: Date.now()};
   await setStored({[STORAGE.enabledTabs]: map});
   return Boolean(enabled);
 }
 
 async function isTabEnabled(tabId) {
-  const map = await tabMap();
-  return Boolean(map[String(tabId)]?.enabled);
+  const {map, handsFree} = await tabSettings();
+  const key = String(tabId);
+  if (Object.prototype.hasOwnProperty.call(map, key)) {
+    return Boolean(map[key]?.enabled);
+  }
+  return handsFree;
 }
+
+async function setHandsFree(enabled) {
+  const value = Boolean(enabled);
+  // Reset per-tab overrides whenever the global mode changes so every current
+  // ChatGPT tab immediately follows the newly selected default.
+  await setStored({[STORAGE.handsFree]: value, [STORAGE.enabledTabs]: {}});
+  const tabs = await chrome.tabs.query({url: ["https://chatgpt.com/*", "https://chat.openai.com/*"]});
+  await Promise.all(tabs.map(async (tab) => {
+    if (!tab.id) return;
+    try {
+      await chrome.tabs.sendMessage(tab.id, {
+        type: "lh-content-config",
+        enabled: value,
+        handsFree: value
+      });
+    } catch {
+      // Content script may not be ready yet; it reads the setting on startup.
+    }
+  }));
+  return value;
+}
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const {map} = await tabSettings();
+  if (Object.prototype.hasOwnProperty.call(map, String(tabId))) {
+    delete map[String(tabId)];
+    await setStored({[STORAGE.enabledTabs]: map});
+  }
+});
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
@@ -118,23 +154,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (type === "lh-status") {
       const bridge = await discover();
       const tabId = message.tabId ?? sender.tab?.id;
-      sendResponse({ok: true, bridge, tabEnabled: tabId ? await isTabEnabled(tabId) : false});
+      const {handsFree} = await tabSettings();
+      sendResponse({
+        ok: true,
+        bridge,
+        handsFree,
+        tabEnabled: tabId ? await isTabEnabled(tabId) : false
+      });
       return;
     }
     if (type === "lh-pair") {
       sendResponse({ok: true, ...(await pair(message.code))});
       return;
     }
+    if (type === "lh-set-hands-free") {
+      const handsFree = await setHandsFree(Boolean(message.enabled));
+      sendResponse({ok: true, handsFree});
+      return;
+    }
     if (type === "lh-enable-tab") {
       const tabId = message.tabId ?? sender.tab?.id;
       if (!tabId) throw new Error("No ChatGPT tab was supplied");
       await setTabEnabled(tabId, Boolean(message.enabled));
-      sendResponse({ok: true, enabled: Boolean(message.enabled)});
+      const {handsFree} = await tabSettings();
+      sendResponse({ok: true, enabled: Boolean(message.enabled), handsFree});
       return;
     }
     if (type === "lh-tab-state") {
       const tabId = message.tabId ?? sender.tab?.id;
-      sendResponse({ok: true, enabled: tabId ? await isTabEnabled(tabId) : false});
+      const {handsFree} = await tabSettings();
+      sendResponse({
+        ok: true,
+        enabled: tabId ? await isTabEnabled(tabId) : false,
+        handsFree
+      });
       return;
     }
     if (type === "lh-execute") {
