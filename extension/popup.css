@@ -1,4 +1,4 @@
-body { margin: 0; width: 330px; font: 13px/1.45 system-ui, sans-serif; background: #111; color: #eee; }
+body { margin: 0; width: 350px; font: 13px/1.45 system-ui, sans-serif; background: #111; color: #eee; }
 main { padding: 14px; }
 h1 { margin: 0 0 10px; font-size: 17px; }
 .status { padding: 8px 10px; border-radius: 8px; background: #222; margin-bottom: 10px; }
@@ -11,3 +11,8 @@ button.secondary { background:#333; }
 p { color:#aaa; font-size:12px; }
 code { color:#ddd; }
 .error { margin-top:10px; color:#ff9999; white-space:pre-wrap; }
+.switch-row { display:flex; align-items:flex-start; gap:10px; margin:10px 0 12px; padding:10px; border-radius:8px; background:#1b1b1b; cursor:pointer; }
+.switch-row input { flex:0 0 auto; width:18px; height:18px; margin:2px 0 0; }
+.switch-row span { display:flex; flex-direction:column; gap:2px; }
+.switch-row strong { font-size:13px; }
+.switch-row small { color:#999; font-size:11px; line-height:1.35; }
