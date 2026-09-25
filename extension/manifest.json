@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Local Hands Companion",
+  "version": "0.6.0",
+  "description": "Bridge ordinary ChatGPT browser conversations to the loopback Local Hands runtime.",
+  "permissions": ["storage", "tabs", "activeTab"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["protocol.js", "content.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Local Hands Companion",
+    "default_popup": "popup.html"
+  }
+}
