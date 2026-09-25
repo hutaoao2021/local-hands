@@ -16,12 +16,19 @@
         <input id="code" inputmode="numeric" maxlength="6" placeholder="123456">
         <button id="pair">Pair</button>
       </div>
-      <p>Run <code>scripts\start-bridge.ps1</code> and enter the code printed in PowerShell.</p>
+      <p>Run <code>scripts\start-bridge.ps1</code> once visibly and enter the code printed in PowerShell.</p>
     </section>
     <section id="controls" hidden>
+      <label class="switch-row">
+        <input id="handsfree" type="checkbox">
+        <span>
+          <strong>Hands-free ChatGPT tabs</strong>
+          <small>Auto-enable and initialize ChatGPT chats. You can still pause any tab from the on-page badge.</small>
+        </span>
+      </label>
       <button id="toggle">Enable this ChatGPT tab</button>
       <button id="init" class="secondary">Initialize this chat</button>
-      <p id="hint">Enable a tab, initialize once, then give ChatGPT your normal task.</p>
+      <p id="hint">For zero-click use after reboot, pair once, install Windows autostart, then enable Hands-free mode once.</p>
     </section>
     <div id="error" class="error" hidden></div>
   </main>
